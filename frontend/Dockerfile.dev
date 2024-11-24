@@ -1,0 +1,17 @@
+# frontend/Dockerfile.dev
+FROM node:18-alpine
+
+WORKDIR /app
+
+# Install nodemon globally
+RUN npm install -g nodemon
+
+COPY package.json package-lock.json ./
+RUN npm install
+
+COPY . .
+
+# Using node to run the start script instead of shell script
+COPY start-dev.js .
+
+CMD ["node", "start-dev.js"]

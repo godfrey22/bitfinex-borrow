@@ -1,0 +1,15 @@
+# backend/Dockerfile.dev
+FROM python:3.9-slim
+
+WORKDIR /app
+
+# Install watchdog for better reload
+RUN pip install watchdog
+
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+
+COPY . .
+
+# Use flask with watchdog for better reloading
+CMD ["python", "-m", "flask", "run", "--host=0.0.0.0", "--reload"]
