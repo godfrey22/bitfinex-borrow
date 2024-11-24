@@ -83,3 +83,9 @@ coverage/
 *.tmp
 *.temp
 .cache 
+
+# 虚拟环境
+/venv/
+
+# 前端依赖
+/frontend/node_modules/

@@ -13,3 +13,7 @@ COPY . .
 
 # Use flask with watchdog for better reloading
 CMD ["python", "-m", "flask", "run", "--host=0.0.0.0", "--reload"]
+
+pytest==8.0.0
+pytest-asyncio==0.23.5
+httpx==0.26.0
