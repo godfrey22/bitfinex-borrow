@@ -5,8 +5,6 @@ import hmac
 import hashlib
 import os
 import logging
-import socket
-import ssl
 from typing import Dict, List
 from websockets.exceptions import WebSocketException
 
@@ -17,42 +15,68 @@ logging.basicConfig(
 )
 logger = logging.getLogger('bitfinex_service')
 
+class FundingCredit:
+    """Class to represent a funding credit"""
+    def __init__(self, data: List):
+        self.credit_id = data[0]
+        self.symbol = data[1]
+        self.side = self._parse_side(data[2])
+        self.created_at = self._parse_timestamp(data[3])
+        self.updated_at = self._parse_timestamp(data[4])
+        self.amount = float(data[5])
+        self.status = data[7]
+        self.rate = float(data[11])
+        self.period = int(data[12])
+        self.opening_timestamp = self._parse_timestamp(data[13])
+        self.last_payout = self._parse_timestamp(data[14])
+        self.is_notify = bool(data[15])
+        self.is_hidden = bool(data[16])
+        self.auto_renew = bool(data[18])
+        self.rate_real = float(data[19]) if data[19] is not None else self.rate
+        self.no_close = bool(data[20])
+        self.position_pair = data[21]
+
+    def _parse_side(self, side: int) -> str:
+        return {
+            1: "lender",
+            0: "both",
+            -1: "borrower"
+        }.get(side, "unknown")
+
+    def _parse_timestamp(self, ts: int) -> str:
+        return datetime.fromtimestamp(ts/1000).isoformat() if ts else None
+
+    def to_dict(self) -> Dict:
+        return {
+            "credit_id": self.credit_id,
+            "symbol": self.symbol,
+            "side": self.side,
+            "amount": self.amount,
+            "status": self.status,
+            "rate": self.rate * 365 * 100,  # Convert to annual percentage
+            "period_days": self.period,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "opening_date": self.opening_timestamp,
+            "last_payout": self.last_payout,
+            "auto_renew": self.auto_renew,
+            "position_pair": self.position_pair,
+            "daily_earnings": self.amount * self.rate,  # Daily earnings
+            "annual_earnings": self.amount * self.rate * 365  # Annual earnings
+        }
+
 class BitfinexService:
     URI = "wss://api-pub.bitfinex.com/ws/2"
-    API_HOST = "api-pub.bitfinex.com"
-    API_PORT = 443
 
     def __init__(self, api_key: str, api_secret: str):
         self.api_key = api_key
         self.api_secret = api_secret
         self.ws = None
         
-        # Validate credentials
         if not api_key or not api_secret:
             logger.error("API credentials not provided")
             raise ValueError("API_KEY and API_SECRET must be provided")
         
-        # Test DNS resolution
-        try:
-            logger.info(f"Testing DNS resolution for {self.API_HOST}")
-            socket.getaddrinfo(self.API_HOST, self.API_PORT)
-            logger.info("DNS resolution successful")
-        except socket.gaierror as e:
-            logger.error(f"DNS resolution failed: {str(e)}")
-            # Try alternative DNS
-            try:
-                logger.info("Trying alternative DNS resolution...")
-                # Try to resolve using Google's DNS
-                import dns.resolver
-                resolver = dns.resolver.Resolver()
-                resolver.nameservers = ['8.8.8.8', '8.8.4.4']
-                answers = resolver.resolve(self.API_HOST, 'A')
-                self.ip = answers[0].address
-                logger.info(f"Resolved IP: {self.ip}")
-            except Exception as dns_error:
-                logger.error(f"Alternative DNS resolution failed: {str(dns_error)}")
-                raise
-
         logger.info("BitfinexService initialized")
 
     def _build_auth_message(self) -> str:
@@ -61,10 +85,7 @@ class BitfinexService:
                 "event": "auth",
                 "apiKey": self.api_key,
                 "authNonce": round(datetime.now().timestamp() * 1_000),
-                "filter": [
-                    "funding",  # offers, credits, loans, funding trades
-                    "wallet",   # wallet information
-                ]
+                "filter": ["funding"]
             }
             
             message["authPayload"] = f"AUTH{message['authNonce']}"
@@ -74,43 +95,22 @@ class BitfinexService:
                 digestmod=hashlib.sha384
             ).hexdigest()
 
-            logger.debug("Auth message built successfully")
             return json.dumps(message)
         except Exception as e:
             logger.error(f"Error building auth message: {str(e)}")
             raise
 
     def connect_and_authenticate(self) -> bool:
-        """Connect to Bitfinex and authenticate"""
         try:
             logger.info("Attempting to connect to Bitfinex WebSocket...")
-            
-            # Create SSL context
-            ssl_context = ssl.create_default_context()
-            ssl_context.check_hostname = True
-            ssl_context.verify_mode = ssl.CERT_REQUIRED
-
-            # Try connection with SSL context
-            try:
-                if hasattr(self, 'ip'):
-                    # Use resolved IP if DNS failed earlier
-                    uri = f"wss://{self.ip}/ws/2"
-                    logger.info(f"Connecting using IP: {uri}")
-                    self.ws = connect(uri, ssl=ssl_context)
-                else:
-                    self.ws = connect(self.URI, ssl=ssl_context)
-                logger.info("WebSocket connection established")
-            except Exception as conn_error:
-                logger.error(f"Connection error: {str(conn_error)}")
-                raise
+            self.ws = connect(self.URI)
+            logger.info("WebSocket connection established")
 
             auth_message = self._build_auth_message()
-            logger.debug(f"Sending auth message: {auth_message}")
             self.ws.send(auth_message)
 
             # Wait for auth response
             for message in self.ws:
-                logger.debug(f"Received message: {message}")
                 data = json.loads(message)
                 if isinstance(data, dict) and data["event"] == "auth":
                     if data["status"] != "OK":
@@ -119,18 +119,12 @@ class BitfinexService:
                     logger.info("Successfully authenticated with Bitfinex")
                     return True
                     
-        except WebSocketException as e:
-            logger.error(f"WebSocket error: {str(e)}")
-            raise
-        except json.JSONDecodeError as e:
-            logger.error(f"JSON decode error: {str(e)}")
-            raise
         except Exception as e:
             logger.error(f"Unexpected error during connection: {str(e)}")
             raise
 
     def get_active_loans(self) -> List[Dict]:
-        """Get active loans"""
+        """Get active funding credits"""
         try:
             if not self.ws:
                 logger.info("No active connection, attempting to connect...")
@@ -138,30 +132,53 @@ class BitfinexService:
                     logger.error("Failed to establish connection")
                     return []
 
-            # Subscribe to funding info
-            subscribe_message = {
-                "event": "subscribe",
-                "channel": "funding",
-                "symbol": "fUSD"  # for USD funding
-            }
-            logger.info("Subscribing to funding channel...")
-            self.ws.send(json.dumps(subscribe_message))
-
             loans = []
-            # Listen for loan information
-            for message in self.ws:
-                logger.debug(f"Received loan data: {message}")
-                data = json.loads(message)
-                if isinstance(data, list) and len(data) > 1:
-                    loans.append(data)
-                    break  # Get first batch of loans
+            message_count = 0
+            max_messages = 10  # Maximum number of messages to wait for
 
-            logger.info(f"Retrieved {len(loans)} loans")
+            while message_count < max_messages:
+                message = self.ws.recv()
+                message_count += 1
+                data = json.loads(message)
+                logger.debug(f"Received message: {data}")
+
+                # Check if it's a funding credits message
+                if isinstance(data, list):
+                    msg_type = data[1] if len(data) > 1 else None
+                    
+                    if msg_type in ["fcs", "fcn", "fcu"]:  # Snapshot or updates
+                        if msg_type == "fcs":  # Snapshot
+                            credits_data = data[2]  # Array of credits
+                            for credit in credits_data:
+                                try:
+                                    funding_credit = FundingCredit(credit)
+                                    loans.append(funding_credit.to_dict())
+                                    logger.info(f"Processed credit: {funding_credit.to_dict()}")
+                                except Exception as e:
+                                    logger.error(f"Error processing credit: {str(e)}")
+                            break  # Exit after processing snapshot
+                        
+                        elif msg_type in ["fcn", "fcu"]:  # New or Update
+                            try:
+                                funding_credit = FundingCredit(data[2])
+                                loans.append(funding_credit.to_dict())
+                                logger.info(f"Processed credit update: {funding_credit.to_dict()}")
+                            except Exception as e:
+                                logger.error(f"Error processing credit update: {str(e)}")
+
+            logger.info(f"Retrieved {len(loans)} funding credits")
             return loans
 
         except Exception as e:
-            logger.error(f"Error getting loans: {str(e)}")
+            logger.error(f"Error getting funding credits: {str(e)}")
             return []
+        finally:
+            if self.ws:
+                try:
+                    self.ws.close()
+                    logger.info("WebSocket connection closed")
+                except Exception as e:
+                    logger.error(f"Error closing connection: {str(e)}")
 
     def close(self):
         """Close WebSocket connection"""
