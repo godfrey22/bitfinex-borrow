@@ -277,7 +277,7 @@ class BitfinexService:
             raise
 
     def get_active_loans(self, maintain_connection: bool = False) -> List[Dict]:
-        """Get active funding loans and credits"""
+        """Get active funding loans and credits (borrower side only)"""
         try:
             if not self.ws or not self.is_connected:
                 logger.info("No active connection, attempting to connect...")
@@ -311,8 +311,11 @@ class BitfinexService:
                                 for credit in credits_data:
                                     try:
                                         funding_credit = FundingCredit(credit)
-                                        loans.append(funding_credit.to_dict())
-                                        logger.info(f"Processed credit: {funding_credit.to_dict()}")
+                                        # Only include borrower side
+                                        if funding_credit.side == "borrower":
+                                            loan_dict = funding_credit.to_dict()
+                                            loans.append(loan_dict)
+                                            logger.info(f"Processed borrower credit: {loan_dict}")
                                     except Exception as e:
                                         logger.error(f"Error processing credit: {str(e)}")
                         
@@ -322,8 +325,11 @@ class BitfinexService:
                                 for loan in loans_data:
                                     try:
                                         funding_loan = FundingLoan(loan)
-                                        loans.append(funding_loan.to_dict())
-                                        logger.info(f"Processed loan: {funding_loan.to_dict()}")
+                                        # Only include borrower side
+                                        if funding_loan.side == "borrower":
+                                            loan_dict = funding_loan.to_dict()
+                                            loans.append(loan_dict)
+                                            logger.info(f"Processed borrower loan: {loan_dict}")
                                     except Exception as e:
                                         logger.error(f"Error processing loan: {str(e)}")
 
@@ -336,7 +342,7 @@ class BitfinexService:
                     if "connection is closed" in str(e):
                         raise  # Re-raise to trigger reconnection
 
-            logger.info(f"Retrieved {len(loans)} funding positions")
+            logger.info(f"Retrieved {len(loans)} borrower-side funding positions")
             
             # Only close if not maintaining connection
             if not maintain_connection:
