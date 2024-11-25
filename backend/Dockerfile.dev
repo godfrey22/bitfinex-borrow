@@ -1,15 +1,18 @@
 # backend/Dockerfile.dev
-FROM python:3.9-slim
+FROM python:3.11-slim
 
-WORKDIR /app
+WORKDIR /backend
 
-# Install watchdog for better reload
-RUN pip install watchdog
+# Copy requirements first for better caching
+COPY requirements*.txt ./
+RUN pip install -r requirements.txt -r requirements-dev.txt
 
-COPY requirements.txt .
-RUN pip install -r requirements.txt
-
+# Copy the rest of the application
 COPY . .
 
-# Use flask with watchdog for better reloading
-CMD ["python", "-m", "flask", "run", "--host=0.0.0.0", "--reload"]
+# Make sure .env is copied
+COPY .env .env
+
+ENV PYTHONPATH=/backend
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
