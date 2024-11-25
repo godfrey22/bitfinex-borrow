@@ -136,3 +136,24 @@ async def close_loans(request: CloseLoansRequest):
             status_code=500,
             detail=f"Error closing loans: {str(e)}"
         )
+
+@app.get("/api/funding-book/{symbol}")
+async def get_funding_book(symbol: str):
+    """Get funding book for a specific symbol"""
+    try:
+        if not bitfinex:
+            raise HTTPException(
+                status_code=503,
+                detail="Bitfinex service not available"
+            )
+
+        logger.info(f"Fetching funding book for {symbol}")
+        book = await bitfinex.get_funding_book(symbol)
+        return book
+
+    except Exception as e:
+        logger.error(f"Error fetching funding book: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error fetching funding book: {str(e)}"
+        )

@@ -504,3 +504,40 @@ class BitfinexService:
             await self.session.close()
         if self.connector:
             await self.connector.close()
+
+    async def get_funding_book(self, symbol: str) -> List[Dict]:
+        """Get funding book for a specific symbol (ask side only)"""
+        try:
+            logger.info(f"Fetching funding book for {symbol}")
+            url = f"https://api-pub.bitfinex.com/v2/book/{symbol}/P0?len=25"
+            
+            headers = {"accept": "application/json"}
+            response = requests.get(url, headers=headers)
+            
+            if not response.ok:
+                logger.error(f"Failed to fetch funding book: {response.text}")
+                return []
+            
+            book_data = response.json()
+            formatted_book = []
+            
+            for entry in book_data:
+                # Only include ask side (amount > 0)
+                if float(entry[3]) > 0:
+                    formatted_entry = {
+                        "rate": float(entry[0]),
+                        "period": int(entry[1]),
+                        "count": int(entry[2]),
+                        "amount": float(entry[3])
+                    }
+                    formatted_book.append(formatted_entry)
+            
+            # Sort by rate ascending
+            formatted_book.sort(key=lambda x: x['rate'])
+            
+            logger.info(f"Retrieved {len(formatted_book)} ask-side funding book entries")
+            return formatted_book
+            
+        except Exception as e:
+            logger.error(f"Error fetching funding book: {str(e)}")
+            return []
