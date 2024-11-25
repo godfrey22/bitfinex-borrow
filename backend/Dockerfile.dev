@@ -3,9 +3,13 @@ FROM python:3.11-slim
 
 WORKDIR /backend
 
-# Copy requirements first for better caching
-COPY requirements*.txt ./
-RUN pip install -r requirements.txt -r requirements-dev.txt
+# Copy and install main requirements
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+
+# Copy and install dev requirements if they exist
+COPY requirements-dev.txt* ./
+RUN if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
 
 # Copy the rest of the application
 COPY . .

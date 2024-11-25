@@ -20,10 +20,8 @@ services:
       context: ./backend
       dockerfile: Dockerfile.dev
     volumes:
-      - ./backend:/app
+      - ./backend:/backend
     ports:
-      - "5000:5000"
+      - "8000:8000"
     environment:
-      - FLASK_APP=app.py
-      - FLASK_ENV=development
-      - FLASK_DEBUG=1
+      - PYTHONPATH=/backend
