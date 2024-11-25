@@ -22,22 +22,16 @@ const LoanTable = () => {
   
   const fetchLoans = async (retryCount = 0) => {
     const MAX_RETRIES = 3;
-    const RETRY_DELAY = 2000; // 2 seconds
+    const RETRY_DELAY = 2000;
     const currentRequest = ++requestCounter.current;
 
-    console.log(`[${currentRequest}] Starting fetchLoans request (attempt ${retryCount + 1}/${MAX_RETRIES + 1})`, {
-      isMounted: mountedRef.current,
-      currentLoading: loading,
-      currentLoansCount: loans.length
-    });
-    
     if (!mountedRef.current) {
       console.log(`[${currentRequest}] Component unmounted, aborting fetch`);
       return;
     }
-    
+
     try {
-      console.log(`[${currentRequest}] Fetching from API...`);
+      console.log(`[${currentRequest}] Fetching loans...`);
       const response = await fetch('http://localhost:8000/api/loans', {
         headers: {
           'Accept': 'application/json',
@@ -47,7 +41,7 @@ const LoanTable = () => {
       
       if (!response.ok) {
         if (response.status === 503 && retryCount < MAX_RETRIES) {
-          console.log(`[${currentRequest}] Service unavailable, retrying in ${RETRY_DELAY}ms... (attempt ${retryCount + 1}/${MAX_RETRIES})`);
+          console.log(`[${currentRequest}] Service unavailable, retrying...`);
           await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
           return fetchLoans(retryCount + 1);
         }
@@ -57,29 +51,17 @@ const LoanTable = () => {
       const data = await response.json();
       console.log(`[${currentRequest}] Received data:`, {
         dataLength: data.length,
-        firstLoanId: data[0]?.loan_id,
-        isMounted: mountedRef.current
+        firstLoanId: data[0]?.loan_id
       });
       
-      if (!data || !data.length) {
-        if (retryCount < MAX_RETRIES) {
-          console.log(`[${currentRequest}] No loans data received, retrying in ${RETRY_DELAY}ms...`);
-          await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
-          return fetchLoans(retryCount + 1);
-        }
-        throw new Error('No loans data received after all retries');
-      }
-      
       if (mountedRef.current) {
-        console.log(`[${currentRequest}] Updating state with ${data.length} loans`);
         setLoans(data);
         setError(null);
         setLoading(false);
       }
     } catch (err) {
-      console.error(`[${currentRequest}] Error in fetchLoans:`, err);
+      console.error(`[${currentRequest}] Error:`, err);
       if (mountedRef.current) {
-        console.log(`[${currentRequest}] Setting error state`);
         setError(err.message);
         setLoading(false);
       }
@@ -87,34 +69,29 @@ const LoanTable = () => {
   };
 
   useEffect(() => {
-    console.log('Effect triggered', {
-      isFirstMount: mountedRef.current,
-      currentLoansCount: loans.length
-    });
-    
-    // Initial fetch
-    fetchLoans();
-    
-    // Set up polling with retry mechanism
-    console.log('Setting up polling interval');
+    console.log('Component mounted');
+    mountedRef.current = true;
+
+    const fetchData = async () => {
+      if (mountedRef.current) {
+        await fetchLoans();
+      }
+    };
+
+    fetchData();
+
     const interval = setInterval(() => {
-      console.log('Polling interval triggered');
-      fetchLoans();
+      if (mountedRef.current) {
+        fetchData();
+      }
     }, 30000);
-    
-    // Cleanup function
+
     return () => {
-      console.log('Cleanup: Component unmounting');
+      console.log('Component will unmount');
       mountedRef.current = false;
       clearInterval(interval);
     };
-  }, []); // Empty dependency array
-
-  console.log('Component rendering', {
-    loading,
-    errorPresent: !!error,
-    loansCount: loans.length
-  });
+  }, []);
 
   if (loading) {
     return (
@@ -135,7 +112,7 @@ const LoanTable = () => {
   return (
     <Box p={3}>
       <Typography variant="h4" gutterBottom>
-        Active Loans
+        Active Loans ({loans.length})
       </Typography>
       <TableContainer component={Paper}>
         <Table>

@@ -297,8 +297,12 @@ class BitfinexService:
 
             logger.info(f"Retrieved {len(loans)} funding positions")
             
+            # Only close if not maintaining connection
             if not maintain_connection:
+                logger.info("Closing connection as maintain_connection=False")
                 self.close()
+            else:
+                logger.info("Keeping connection open as maintain_connection=True")
                 
             return loans
 
