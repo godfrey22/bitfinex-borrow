@@ -28,8 +28,16 @@ services:
       - "8000:8000"
     environment:
       - PYTHONPATH=/backend
+      - PYTHONUNBUFFERED=1
+      - REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+      - CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
     networks:
       - app-network
+    extra_hosts:
+      - "api.bitfinex.com:104.16.174.181"  # Add Bitfinex API IP
 
 networks:
   app-network:

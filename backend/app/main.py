@@ -5,6 +5,8 @@ from dotenv import load_dotenv
 import logging
 import sys
 from pathlib import Path
+from typing import List
+from pydantic import BaseModel
 
 from app.services.bitfinex import BitfinexService
 
@@ -52,6 +54,10 @@ app.add_middleware(
 
 # Initialize Bitfinex service
 bitfinex = None
+
+# Add request model
+class CloseLoansRequest(BaseModel):
+    loan_ids: List[int]
 
 @app.on_event("startup")
 async def startup_event():
@@ -107,4 +113,26 @@ async def get_loans():
         raise HTTPException(
             status_code=500,
             detail=f"Error fetching loans: {str(e)}"
+        )
+
+@app.post("/api/loans/close")
+async def close_loans(request: CloseLoansRequest):
+    """Close selected funding positions"""
+    try:
+        if not bitfinex:
+            raise HTTPException(
+                status_code=503,
+                detail="Bitfinex service not available"
+            )
+
+        logger.info(f"Attempting to close loans: {request.loan_ids}")
+        results = await bitfinex.close_loans(request.loan_ids)
+        return {"success": True, "results": results}
+
+    except Exception as e:
+        logger.error(f"Error closing loans: {str(e)}")
+        logger.exception("Full exception details:")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error closing loans: {str(e)}"
         )

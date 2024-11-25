@@ -3,6 +3,12 @@ FROM python:3.11-slim
 
 WORKDIR /backend
 
+# Install system dependencies including SSL certificates
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
 # Copy and install main requirements
 COPY requirements.txt .
 RUN pip install -r requirements.txt
@@ -18,5 +24,7 @@ COPY . .
 COPY .env .env
 
 ENV PYTHONPATH=/backend
+ENV REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+ENV CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]

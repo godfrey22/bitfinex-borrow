@@ -3,9 +3,12 @@ from datetime import datetime
 import json
 import hmac
 import hashlib
-import os
 import logging
 from typing import Dict, List
+import time
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # Set up logging
 logging.basicConfig(
@@ -115,8 +118,20 @@ class FundingLoan:
             "annual_earnings": self.amount * self.rate * 365 if self.amount and self.rate else 0
         }
 
+class TimeoutHTTPAdapter(HTTPAdapter):
+    def __init__(self, *args, **kwargs):
+        self.timeout = kwargs.pop('timeout', 30)
+        super().__init__(*args, **kwargs)
+
+    def send(self, request, **kwargs):
+        kwargs['timeout'] = self.timeout
+        return super().send(request, **kwargs)
+
 class BitfinexService:
-    URI = "wss://api-pub.bitfinex.com/ws/2"
+    WS_URI = "wss://api-pub.bitfinex.com/ws/2"
+    REST_URI = "https://api.bitfinex.com/v2"
+    API_HOST = "api.bitfinex.com"
+    API_PORT = 443
 
     def __init__(self, api_key: str, api_secret: str):
         logger.debug("BitfinexService initialization started")
@@ -137,8 +152,34 @@ class BitfinexService:
         self.ws = None
         self.is_connected = False
         self.loans = []
-        
+        self.session = None
+        self.connector = None
         logger.info("BitfinexService initialized successfully")
+
+    async def _init_session(self):
+        """Initialize aiohttp session with proper DNS resolution"""
+        import aiohttp
+        import socket
+        try:
+            # Resolve IP address
+            logger.debug(f"Resolving {self.API_HOST}")
+            ip_address = socket.gethostbyname(self.API_HOST)
+            logger.debug(f"Resolved {self.API_HOST} to {ip_address}")
+
+            # Create TCP connector with resolved DNS
+            self.connector = aiohttp.TCPConnector(
+                ssl=True,
+                force_close=True,
+                enable_cleanup_closed=True
+            )
+            
+            # Create session
+            self.session = aiohttp.ClientSession(connector=self.connector)
+            logger.debug("HTTP session initialized")
+            
+        except Exception as e:
+            logger.error(f"Error initializing session: {str(e)}")
+            raise
 
     def _build_auth_message(self) -> str:
         """Build authentication message for Bitfinex"""
@@ -177,7 +218,7 @@ class BitfinexService:
     def connect_and_authenticate(self) -> bool:
         try:
             logger.info("Attempting to connect to Bitfinex WebSocket...")
-            self.ws = connect(self.URI)
+            self.ws = connect(self.WS_URI)
             logger.info("WebSocket connection established")
 
             auth_message = self._build_auth_message()
@@ -211,7 +252,7 @@ class BitfinexService:
                 self.is_connected = False
 
             # Create new connection
-            self.ws = connect(self.URI)
+            self.ws = connect(self.WS_URI)
             logger.info("New WebSocket connection established")
 
             # Re-authenticate
@@ -321,3 +362,145 @@ class BitfinexService:
                 logger.info("WebSocket connection closed")
             except Exception as e:
                 logger.error(f"Error closing WebSocket: {str(e)}") 
+
+    def _generate_auth_headers(self, endpoint: str, body: dict = None) -> dict:
+        """Generate authentication headers for REST API"""
+        nonce = str(int(time.time() * 1000))
+        signature_data = f'/api/v2/{endpoint}{nonce}'
+        if body:
+            signature_data += json.dumps(body)
+            
+        signature = hmac.new(
+            self.api_secret.encode(),
+            signature_data.encode(),
+            hashlib.sha384
+        ).hexdigest()
+
+        return {
+            "bfx-nonce": nonce,
+            "bfx-apikey": self.api_key,
+            "bfx-signature": signature,
+            "content-type": "application/json"
+        }
+
+    async def close_loans(self, loan_ids: List[int]) -> List[Dict]:
+        """Close multiple funding positions with improved connection handling"""
+        results = []
+        
+        # Configure session with retries and timeouts
+        session = requests.Session()
+        retry_strategy = Retry(
+            total=3,
+            backoff_factor=1,
+            status_forcelist=[408, 429, 500, 502, 503, 504],
+        )
+        adapter = TimeoutHTTPAdapter(timeout=10, max_retries=retry_strategy)
+        session.mount("https://", adapter)
+        
+        for loan_id in loan_ids:
+            try:
+                logger.info(f"Attempting to close loan {loan_id}")
+                
+                endpoint = "auth/w/funding/close"
+                payload = {"id": loan_id}
+                
+                # Generate authentication headers
+                nonce = str(int(time.time() * 1000))
+                signature_payload = f'/api/v2/{endpoint}{nonce}{json.dumps(payload)}'
+                
+                logger.debug(f"Signature payload: {signature_payload}")
+                
+                signature = hmac.new(
+                    self.api_secret.encode(),
+                    signature_payload.encode(),
+                    hashlib.sha384
+                ).hexdigest()
+                
+                headers = {
+                    "accept": "application/json",
+                    "content-type": "application/json",
+                    "bfx-nonce": nonce,
+                    "bfx-apikey": self.api_key,
+                    "bfx-signature": signature
+                }
+                
+                url = f"{self.REST_URI}/{endpoint}"
+                logger.debug(f"Sending request to {url}")
+                logger.debug(f"Payload: {json.dumps(payload)}")
+                logger.debug(f"Headers: {headers}")
+                
+                # Test connection first
+                try:
+                    test_response = session.get("https://api.bitfinex.com/v2/platform/status")
+                    logger.debug(f"Platform status response: {test_response.status_code}")
+                except requests.exceptions.RequestException as e:
+                    logger.error(f"Cannot connect to Bitfinex API: {str(e)}")
+                    raise ConnectionError(f"Cannot connect to Bitfinex API: {str(e)}")
+                
+                # Send the actual request
+                response = session.post(
+                    url,
+                    json=payload,
+                    headers=headers,
+                    verify=True  # Verify SSL certificates
+                )
+                
+                logger.debug(f"Response status: {response.status_code}")
+                logger.debug(f"Response text: {response.text}")
+                
+                try:
+                    response_data = response.json()
+                    message = json.dumps(response_data)
+                except json.JSONDecodeError:
+                    message = response.text if response.text else "No response text"
+                
+                success = response.status_code == 200
+                
+                results.append({
+                    "loan_id": loan_id,
+                    "success": success,
+                    "message": message,
+                    "status_code": response.status_code
+                })
+                
+                logger.info(f"Close result for loan {loan_id}: {success} ({message})")
+                
+            except requests.exceptions.ConnectionError as e:
+                error_msg = f"Connection error: {str(e)}"
+                logger.error(error_msg)
+                results.append({
+                    "loan_id": loan_id,
+                    "success": False,
+                    "message": error_msg,
+                    "status_code": None
+                })
+            except requests.exceptions.RequestException as e:
+                error_msg = f"Request error: {str(e)}"
+                logger.error(error_msg)
+                results.append({
+                    "loan_id": loan_id,
+                    "success": False,
+                    "message": error_msg,
+                    "status_code": None
+                })
+            except Exception as e:
+                error_msg = f"Error closing loan {loan_id}: {str(e)}"
+                logger.error(error_msg)
+                results.append({
+                    "loan_id": loan_id,
+                    "success": False,
+                    "message": error_msg,
+                    "status_code": None
+                })
+        
+        session.close()
+        return results
+
+    async def cleanup(self):
+        """Cleanup resources"""
+        if self.ws:
+            self.ws.close()
+        if self.session:
+            await self.session.close()
+        if self.connector:
+            await self.connector.close()
