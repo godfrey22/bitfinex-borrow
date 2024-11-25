@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Table,
   TableBody,
@@ -9,36 +9,112 @@ import {
   Paper,
   Typography,
   Box,
-  CircularProgress
+  CircularProgress,
+  Alert
 } from '@mui/material';
 
 const LoanTable = () => {
   const [loans, setLoans] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const mountedRef = useRef(true);
+  const requestCounter = useRef(0);
+  
+  const fetchLoans = async (retryCount = 0) => {
+    const MAX_RETRIES = 3;
+    const RETRY_DELAY = 2000; // 2 seconds
+    const currentRequest = ++requestCounter.current;
 
-  const fetchLoans = async () => {
+    console.log(`[${currentRequest}] Starting fetchLoans request (attempt ${retryCount + 1}/${MAX_RETRIES + 1})`, {
+      isMounted: mountedRef.current,
+      currentLoading: loading,
+      currentLoansCount: loans.length
+    });
+    
+    if (!mountedRef.current) {
+      console.log(`[${currentRequest}] Component unmounted, aborting fetch`);
+      return;
+    }
+    
     try {
-      const response = await fetch('http://localhost:8000/api/loans');
+      console.log(`[${currentRequest}] Fetching from API...`);
+      const response = await fetch('http://localhost:8000/api/loans', {
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+        }
+      });
+      
       if (!response.ok) {
+        if (response.status === 503 && retryCount < MAX_RETRIES) {
+          console.log(`[${currentRequest}] Service unavailable, retrying in ${RETRY_DELAY}ms... (attempt ${retryCount + 1}/${MAX_RETRIES})`);
+          await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
+          return fetchLoans(retryCount + 1);
+        }
         throw new Error(`HTTP error! status: ${response.status}`);
       }
+      
       const data = await response.json();
-      setLoans(data);
-      setError(null);
+      console.log(`[${currentRequest}] Received data:`, {
+        dataLength: data.length,
+        firstLoanId: data[0]?.loan_id,
+        isMounted: mountedRef.current
+      });
+      
+      if (!data || !data.length) {
+        if (retryCount < MAX_RETRIES) {
+          console.log(`[${currentRequest}] No loans data received, retrying in ${RETRY_DELAY}ms...`);
+          await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
+          return fetchLoans(retryCount + 1);
+        }
+        throw new Error('No loans data received after all retries');
+      }
+      
+      if (mountedRef.current) {
+        console.log(`[${currentRequest}] Updating state with ${data.length} loans`);
+        setLoans(data);
+        setError(null);
+        setLoading(false);
+      }
     } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
+      console.error(`[${currentRequest}] Error in fetchLoans:`, err);
+      if (mountedRef.current) {
+        console.log(`[${currentRequest}] Setting error state`);
+        setError(err.message);
+        setLoading(false);
+      }
     }
   };
 
   useEffect(() => {
+    console.log('Effect triggered', {
+      isFirstMount: mountedRef.current,
+      currentLoansCount: loans.length
+    });
+    
+    // Initial fetch
     fetchLoans();
-    // Poll for updates every 30 seconds
-    const interval = setInterval(fetchLoans, 30000);
-    return () => clearInterval(interval);
-  }, []);
+    
+    // Set up polling with retry mechanism
+    console.log('Setting up polling interval');
+    const interval = setInterval(() => {
+      console.log('Polling interval triggered');
+      fetchLoans();
+    }, 30000);
+    
+    // Cleanup function
+    return () => {
+      console.log('Cleanup: Component unmounting');
+      mountedRef.current = false;
+      clearInterval(interval);
+    };
+  }, []); // Empty dependency array
+
+  console.log('Component rendering', {
+    loading,
+    errorPresent: !!error,
+    loansCount: loans.length
+  });
 
   if (loading) {
     return (
@@ -51,7 +127,7 @@ const LoanTable = () => {
   if (error) {
     return (
       <Box p={3}>
-        <Typography color="error">Error: {error}</Typography>
+        <Alert severity="error">Error loading loans: {error}</Alert>
       </Box>
     );
   }
@@ -68,12 +144,9 @@ const LoanTable = () => {
               <TableCell>ID</TableCell>
               <TableCell>Symbol</TableCell>
               <TableCell>Amount</TableCell>
-              <TableCell>Rate (% APR)</TableCell>
+              <TableCell>Rate</TableCell>
               <TableCell>Period (Days)</TableCell>
               <TableCell>Status</TableCell>
-              <TableCell>Daily Earnings</TableCell>
-              <TableCell>Annual Earnings</TableCell>
-              <TableCell>Auto Renew</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -82,12 +155,9 @@ const LoanTable = () => {
                 <TableCell>{loan.loan_id || loan.credit_id}</TableCell>
                 <TableCell>{loan.symbol}</TableCell>
                 <TableCell>{loan.amount.toFixed(2)}</TableCell>
-                <TableCell>{loan.rate.toFixed(4)}%</TableCell>
+                <TableCell>{loan.rate.toFixed(6)}</TableCell>
                 <TableCell>{loan.period_days}</TableCell>
                 <TableCell>{loan.status}</TableCell>
-                <TableCell>${loan.daily_earnings.toFixed(4)}</TableCell>
-                <TableCell>${loan.annual_earnings.toFixed(2)}</TableCell>
-                <TableCell>{loan.auto_renew ? 'Yes' : 'No'}</TableCell>
               </TableRow>
             ))}
           </TableBody>

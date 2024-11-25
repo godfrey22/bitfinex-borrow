@@ -36,10 +36,15 @@ for key in ['BFX_API_KEY', 'BFX_API_SECRET']:
 
 app = FastAPI()
 
-# Add CORS middleware
+# Update CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://0.0.0.0:3000",
+        "http://127.0.0.1:3000",
+        # Add any other origins you need
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -78,6 +83,19 @@ async def startup_event():
 @app.get("/api/loans")
 async def get_loans():
     """Get active loans from Bitfinex"""
+    global bitfinex  # Ensure we can modify the global instance if needed
+    
+    async def attempt_fetch():
+        try:
+            loans = bitfinex.get_active_loans(maintain_connection=False)
+            logger.info(f"Retrieved {len(loans)} loans")
+            if loans:  # Only return if we actually got loans
+                return loans
+            return None
+        except Exception as e:
+            logger.warning(f"Fetch attempt failed: {str(e)}")
+            return None
+
     try:
         logger.debug("Loan request received")
         logger.debug(f"Bitfinex service initialized: {bitfinex is not None}")
@@ -89,13 +107,36 @@ async def get_loans():
                 detail="Bitfinex service not available"
             )
 
-        logger.info("Fetching loans from Bitfinex...")
-        loans = bitfinex.get_active_loans(maintain_connection=True)
-        logger.info(f"Retrieved {len(loans)} loans")
+        # First attempt
+        logger.info("Attempting first fetch...")
+        loans = await attempt_fetch()
+        
+        # If first attempt fails, try reconnecting
+        if not loans:
+            logger.info("First attempt failed, reconnecting...")
+            try:
+                await bitfinex.reconnect()
+                await asyncio.sleep(1)  # Give the connection time to establish
+                logger.info("Attempting fetch after reconnection...")
+                loans = await attempt_fetch()
+            except Exception as reconnect_error:
+                logger.error(f"Reconnection failed: {str(reconnect_error)}")
+                raise HTTPException(
+                    status_code=503,
+                    detail="Failed to reconnect to Bitfinex"
+                )
+
+        # If we still don't have loans after reconnection
+        if not loans:
+            logger.error("Failed to retrieve loans after reconnection")
+            raise HTTPException(
+                status_code=503,
+                detail="Failed to retrieve loans after reconnection"
+            )
+
         return loans
 
-    except HTTPException as he:
-        logger.error(f"Error fetching loans: {he.status_code}: {he.detail}")
+    except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error fetching loans: {str(e)}")

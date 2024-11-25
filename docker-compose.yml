@@ -12,8 +12,11 @@ services:
       - "3000:3000"
     environment:
       - WATCHPACK_POLLING=true
+      - REACT_APP_API_URL=http://localhost:8000
     depends_on:
       - backend
+    networks:
+      - app-network
 
   backend:
     build:
@@ -25,3 +28,9 @@ services:
       - "8000:8000"
     environment:
       - PYTHONPATH=/backend
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge

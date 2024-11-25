@@ -197,16 +197,48 @@ class BitfinexService:
             logger.error(f"Unexpected error during connection: {str(e)}")
             raise
 
-    def get_active_loans(self, maintain_connection: bool = False) -> List[Dict]:
-        """
-        Get active funding loans and credits
-        Args:
-            maintain_connection (bool): If True, keeps the connection open for updates
-        Returns:
-            List[Dict]: List of active loans
-        """
+    async def reconnect(self) -> bool:
+        """Reconnect to Bitfinex WebSocket"""
+        logger.info("Attempting to reconnect...")
         try:
-            if not self.ws:
+            # Close existing connection if any
+            if self.ws:
+                try:
+                    self.ws.close()
+                except Exception:
+                    pass
+                self.ws = None
+                self.is_connected = False
+
+            # Create new connection
+            self.ws = connect(self.URI)
+            logger.info("New WebSocket connection established")
+
+            # Re-authenticate
+            auth_message = self._build_auth_message()
+            self.ws.send(auth_message)
+
+            # Wait for auth response
+            for message in self.ws:
+                data = json.loads(message)
+                if isinstance(data, dict) and data["event"] == "auth":
+                    if data["status"] != "OK":
+                        logger.error(f"Re-authentication failed: {data}")
+                        raise Exception(f"Re-authentication failed: {data.get('msg', 'Unknown error')}")
+                    logger.info("Successfully re-authenticated with Bitfinex")
+                    self.is_connected = True
+                    return True
+
+        except Exception as e:
+            logger.error(f"Reconnection failed: {str(e)}")
+            self.ws = None
+            self.is_connected = False
+            raise
+
+    def get_active_loans(self, maintain_connection: bool = False) -> List[Dict]:
+        """Get active funding loans and credits"""
+        try:
+            if not self.ws or not self.is_connected:
                 logger.info("No active connection, attempting to connect...")
                 if not self.connect_and_authenticate():
                     logger.error("Failed to establish connection")
@@ -214,48 +246,54 @@ class BitfinexService:
 
             loans = []
             message_count = 0
-            max_messages = 10  # Maximum number of messages to wait for
+            max_messages = 10
 
             while message_count < max_messages:
-                message = self.ws.recv()
-                message_count += 1
-                data = json.loads(message)
-                logger.debug(f"Received message: {data}")
+                try:
+                    message = self.ws.recv()
+                    message_count += 1
+                    data = json.loads(message)
+                    logger.debug(f"Received message: {data}")
 
-                # Check if it's a funding message
-                if isinstance(data, list) and len(data) > 1:
-                    msg_type = data[1]
-                    
-                    # Handle different funding message types
-                    if msg_type in ["fcs", "fcn", "fcu"]:  # Credits
-                        if msg_type == "fcs" and len(data) > 2:  # Snapshot
-                            credits_data = data[2]
-                            for credit in credits_data:
-                                try:
-                                    funding_credit = FundingCredit(credit)
-                                    loans.append(funding_credit.to_dict())
-                                    logger.info(f"Processed credit: {funding_credit.to_dict()}")
-                                except Exception as e:
-                                    logger.error(f"Error processing credit: {str(e)}")
-                    
-                    elif msg_type in ["fls", "fln", "flu"]:  # Loans
-                        if msg_type == "fls" and len(data) > 2:  # Snapshot
-                            loans_data = data[2]
-                            for loan in loans_data:
-                                try:
-                                    funding_loan = FundingLoan(loan)
-                                    loans.append(funding_loan.to_dict())
-                                    logger.info(f"Processed loan: {funding_loan.to_dict()}")
-                                except Exception as e:
-                                    logger.error(f"Error processing loan: {str(e)}")
-                    
-                    elif msg_type == "hb":  # Heartbeat
-                        logger.debug("Received heartbeat")
-                        continue
+                    # Check if it's a funding message
+                    if isinstance(data, list) and len(data) > 1:
+                        msg_type = data[1]
+                        
+                        if msg_type == "hb":  # Heartbeat
+                            logger.debug("Received heartbeat")
+                            continue
 
-                # Break if we have processed both snapshots
-                if message_count >= 3:  # We usually get fos, fcs, and fls messages
-                    break
+                        # Handle different funding message types
+                        if msg_type in ["fcs", "fcn", "fcu"]:  # Credits
+                            if msg_type == "fcs" and len(data) > 2:  # Snapshot
+                                credits_data = data[2]
+                                for credit in credits_data:
+                                    try:
+                                        funding_credit = FundingCredit(credit)
+                                        loans.append(funding_credit.to_dict())
+                                        logger.info(f"Processed credit: {funding_credit.to_dict()}")
+                                    except Exception as e:
+                                        logger.error(f"Error processing credit: {str(e)}")
+                        
+                        elif msg_type in ["fls", "fln", "flu"]:  # Loans
+                            if msg_type == "fls" and len(data) > 2:  # Snapshot
+                                loans_data = data[2]
+                                for loan in loans_data:
+                                    try:
+                                        funding_loan = FundingLoan(loan)
+                                        loans.append(funding_loan.to_dict())
+                                        logger.info(f"Processed loan: {funding_loan.to_dict()}")
+                                    except Exception as e:
+                                        logger.error(f"Error processing loan: {str(e)}")
+
+                    # Break if we have loans
+                    if loans:
+                        break
+
+                except Exception as e:
+                    logger.error(f"Error processing message: {str(e)}")
+                    if "connection is closed" in str(e):
+                        raise  # Re-raise to trigger reconnection
 
             logger.info(f"Retrieved {len(loans)} funding positions")
             
@@ -268,13 +306,14 @@ class BitfinexService:
             logger.error(f"Error getting funding positions: {str(e)}")
             if not maintain_connection:
                 self.close()
-            return []
+            raise  # Re-raise to allow retry in main.py
 
     def close(self):
         """Close WebSocket connection"""
         if self.ws:
             try:
                 self.ws.close()
+                self.is_connected = False
                 logger.info("WebSocket connection closed")
             except Exception as e:
                 logger.error(f"Error closing WebSocket: {str(e)}") 
