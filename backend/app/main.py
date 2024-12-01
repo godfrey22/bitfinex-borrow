@@ -1,4 +1,5 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends, Security
+from fastapi.security import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
 import os
 from dotenv import load_dotenv
@@ -31,24 +32,33 @@ logger.debug(f"BFX_API_SECRET exists: {'BFX_API_SECRET' in os.environ}")
 
 # Print environment variables (be careful with this in production)
 logger.debug("Environment variables content:")
-for key in ['BFX_API_KEY', 'BFX_API_SECRET']:
+for key in ['BFX_API_KEY', 'BFX_API_SECRET', 'APP_API_KEY', 'APP_USERNAME', 'APP_PASSWORD']:
     if key in os.environ:
         value = os.environ[key]
         logger.debug(f"{key}: {value[:4]}..." if value else f"{key}: None")
 
 app = FastAPI()
 
+# Add API key security
+API_KEY_NAME = "X-API-Key"
+api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=True)
+
+async def get_api_key(api_key_header: str = Security(api_key_header)):
+    if api_key_header != os.getenv("APP_API_KEY"):
+        raise HTTPException(
+            status_code=403,
+            detail="Could not validate API key"
+        )
+    return api_key_header
+
 # Update CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:3000",
-        "http://0.0.0.0:3000",
-        "http://127.0.0.1:3000",
-        # Add any other origins you need
+        os.getenv("FRONTEND_URL", "http://localhost:3000"),  # Get from environment variable
     ],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST"],  # Specify only needed methods
     allow_headers=["*"],
 )
 
@@ -58,6 +68,33 @@ bitfinex = None
 # Add request model
 class CloseLoansRequest(BaseModel):
     loan_ids: List[int]
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+class LoginResponse(BaseModel):
+    api_key: str
+
+@app.post("/api/login", response_model=LoginResponse)
+async def login(request: LoginRequest):
+    """Login endpoint to get API key"""
+    expected_username = os.getenv("APP_USERNAME")
+    expected_password = os.getenv("APP_PASSWORD")
+    
+    if not expected_username or not expected_password:
+        raise HTTPException(
+            status_code=500,
+            detail="Login credentials not configured"
+        )
+    
+    if request.username != expected_username or request.password != expected_password:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid credentials"
+        )
+    
+    return LoginResponse(api_key=os.getenv("APP_API_KEY"))
 
 @app.on_event("startup")
 async def startup_event():
@@ -87,7 +124,7 @@ async def startup_event():
         bitfinex = None
 
 @app.get("/api/loans")
-async def get_loans():
+async def get_loans(api_key: str = Depends(get_api_key)):
     """Get active loans from Bitfinex"""
     global bitfinex
     
@@ -116,7 +153,7 @@ async def get_loans():
         )
 
 @app.post("/api/loans/close")
-async def close_loans(request: CloseLoansRequest):
+async def close_loans(request: CloseLoansRequest, api_key: str = Depends(get_api_key)):
     """Close selected funding positions"""
     try:
         if not bitfinex:
@@ -138,7 +175,7 @@ async def close_loans(request: CloseLoansRequest):
         )
 
 @app.get("/api/funding-book/{symbol}")
-async def get_funding_book(symbol: str):
+async def get_funding_book(symbol: str, api_key: str = Depends(get_api_key)):
     """Get funding book for a specific symbol"""
     try:
         if not bitfinex:

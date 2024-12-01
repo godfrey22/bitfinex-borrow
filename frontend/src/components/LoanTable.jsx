@@ -33,8 +33,15 @@ const FundingBook = ({ symbol }) => {
     const fetchBook = async () => {
       try {
         setLoading(true);
-        const response = await fetch(`http://localhost:8000/api/funding-book/${symbol}`);
+        const response = await fetch(`${process.env.REACT_APP_API_URL}/api/funding-book/${symbol}`, {
+          headers: {
+            'X-API-Key': localStorage.getItem('apiKey')
+          }
+        });
         if (!response.ok) {
+          if (response.status === 403) {
+            throw new Error('Unauthorized access');
+          }
           throw new Error(`HTTP error! status: ${response.status}`);
         }
         const data = await response.json();
@@ -111,10 +118,11 @@ const LoanTable = () => {
 
     try {
       console.log(`[${currentRequest}] Fetching loans...`);
-      const response = await fetch('http://localhost:8000/api/loans', {
+      const response = await fetch(`${process.env.REACT_APP_API_URL}/api/loans`, {
         headers: {
           'Accept': 'application/json',
           'Content-Type': 'application/json',
+          'X-API-Key': localStorage.getItem('apiKey')
         }
       });
       
@@ -123,6 +131,9 @@ const LoanTable = () => {
           console.log(`[${currentRequest}] Service unavailable, retrying...`);
           await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
           return fetchLoans(retryCount + 1);
+        }
+        if (response.status === 403) {
+          throw new Error('Unauthorized access');
         }
         throw new Error(`HTTP error! status: ${response.status}`);
       }
@@ -217,11 +228,12 @@ const LoanTable = () => {
       setClosingLoans(true);
       console.log('Attempting to close loans:', selectedLoans);
       
-      const response = await fetch('http://localhost:8000/api/loans/close', {
+      const response = await fetch(`${process.env.REACT_APP_API_URL}/api/loans/close`, {
         method: 'POST',
         headers: {
           'Accept': 'application/json',
           'Content-Type': 'application/json',
+          'X-API-Key': localStorage.getItem('apiKey')
         },
         body: JSON.stringify({
           loan_ids: selectedLoans  // Wrap in object with loan_ids key
@@ -229,6 +241,9 @@ const LoanTable = () => {
       });
 
       if (!response.ok) {
+        if (response.status === 403) {
+          throw new Error('Unauthorized access');
+        }
         const errorData = await response.json();
         throw new Error(errorData.detail || `Failed to close loans: ${response.status}`);
       }
