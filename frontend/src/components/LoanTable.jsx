@@ -48,7 +48,6 @@ const FundingBook = ({ symbol }) => {
         setBook(data);
         setError(null);
       } catch (err) {
-        console.error('Error fetching funding book:', err);
         setError(err.message);
       } finally {
         setLoading(false);
@@ -112,12 +111,10 @@ const LoanTable = () => {
     const currentRequest = ++requestCounter.current;
 
     if (!mountedRef.current) {
-      console.log(`[${currentRequest}] Component unmounted, aborting fetch`);
       return;
     }
 
     try {
-      console.log(`[${currentRequest}] Fetching loans...`);
       const response = await fetch(`${process.env.REACT_APP_API_URL}/api/loans`, {
         headers: {
           'Accept': 'application/json',
@@ -128,7 +125,6 @@ const LoanTable = () => {
       
       if (!response.ok) {
         if (response.status === 503 && retryCount < MAX_RETRIES) {
-          console.log(`[${currentRequest}] Service unavailable, retrying...`);
           await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
           return fetchLoans(retryCount + 1);
         }
@@ -139,10 +135,6 @@ const LoanTable = () => {
       }
       
       const data = await response.json();
-      console.log(`[${currentRequest}] Received data:`, {
-        dataLength: data.length,
-        firstLoanId: data[0]?.loan_id
-      });
       
       if (mountedRef.current) {
         setLoans(data);
@@ -150,7 +142,6 @@ const LoanTable = () => {
         setLoading(false);
       }
     } catch (err) {
-      console.error(`[${currentRequest}] Error:`, err);
       if (mountedRef.current) {
         setError(err.message);
         setLoading(false);
@@ -159,7 +150,6 @@ const LoanTable = () => {
   };
 
   useEffect(() => {
-    console.log('Component mounted');
     mountedRef.current = true;
 
     const fetchData = async () => {
@@ -177,7 +167,6 @@ const LoanTable = () => {
     }, 30000);
 
     return () => {
-      console.log('Component will unmount');
       mountedRef.current = false;
       clearInterval(interval);
     };
@@ -226,7 +215,6 @@ const LoanTable = () => {
 
     try {
       setClosingLoans(true);
-      console.log('Attempting to close loans:', selectedLoans);
       
       const response = await fetch(`${process.env.REACT_APP_API_URL}/api/loans/close`, {
         method: 'POST',
@@ -244,24 +232,19 @@ const LoanTable = () => {
         if (response.status === 403) {
           throw new Error('Unauthorized access');
         }
-        const errorData = await response.json();
-        throw new Error(errorData.detail || `Failed to close loans: ${response.status}`);
+        throw new Error(`HTTP error! status: ${response.status}`);
       }
 
       const result = await response.json();
-      console.log('Close result:', result);
-
+      
       if (result.success) {
-        // Show success message
         setError(null);
-        // Refresh loans list
         await fetchLoans();
         setSelectedLoans([]);
       } else {
         throw new Error('Failed to close some loans');
       }
     } catch (err) {
-      console.error('Error closing loans:', err);
       setError(err.message);
     } finally {
       setClosingLoans(false);
