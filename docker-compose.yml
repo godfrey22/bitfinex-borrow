@@ -1,5 +1,3 @@
-# docker-compose.yml
-version: '3.8'
 services:
   frontend:
     build:
@@ -12,7 +10,6 @@ services:
       - "3000:3000"
     environment:
       - WATCHPACK_POLLING=true
-      - REACT_APP_API_URL=http://localhost:8000
     depends_on:
       - backend
     networks:
@@ -31,13 +28,14 @@ services:
       - PYTHONUNBUFFERED=1
       - REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
       - CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+      - FRONTEND_URL=http://148.135.57.171:3000
     dns:
       - 8.8.8.8
       - 8.8.4.4
     networks:
       - app-network
     extra_hosts:
-      - "api.bitfinex.com:104.16.174.181"  # Add Bitfinex API IP
+      - "api.bitfinex.com:104.16.174.181"
 
 networks:
   app-network:
