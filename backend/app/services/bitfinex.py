@@ -56,7 +56,7 @@ class FundingCredit:
             "side": self.side,
             "amount": self.amount,
             "status": self.status,
-            "rate": self.rate * 365 * 100,  # Convert to annual percentage
+            "rate": self.rate * 100,  # Convert to percentage
             "period_days": self.period,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
@@ -106,7 +106,7 @@ class FundingLoan:
             "side": self.side,
             "amount": self.amount,
             "status": self.status,
-            "rate": self.rate * 365 * 100,  # Convert to annual percentage
+            "rate": self.rate * 100,  # Convert to percentage
             "period_days": self.period,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
